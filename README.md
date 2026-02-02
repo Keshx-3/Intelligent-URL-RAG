@@ -1,1 +1,1 @@
-# Web-based-Knowledge-Assistant-using-Retrieval-Augmented-Generation
+# Web-based RAG Assistant
