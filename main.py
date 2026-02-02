@@ -1,198 +1,171 @@
-#main.py
 import asyncio
 import sys
 import time
+import re
 from urllib.parse import urlparse
-
-if sys.platform.startswith("win"):
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 import streamlit as st
 from rag import process_urls, generate_answer
 
+# Windows-specific event loop fix
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # -------------------------------------------------
 # Page Config
 # -------------------------------------------------
 st.set_page_config(
-    page_title="Web-based Knowledge Assistant using RAG",
-    layout="centered"
+    page_title="Web-based RAG Assistant",
+    page_icon="📖",
+    layout="wide"
 )
-st.title("Web-based Knowledge Assistant using RAG")
-
 
 # -------------------------------------------------
-# Helpers
+# Helpers & Validation Logic
 # -------------------------------------------------
 def is_valid_url(url: str) -> bool:
     try:
+        url = url.strip()
         parsed = urlparse(url)
         return parsed.scheme in ("http", "https") and bool(parsed.netloc)
     except Exception:
         return False
 
-
 def is_supported_url(url: str) -> bool:
     path = urlparse(url).path.lower()
-
-    blocked_ext = (
-        ".png", ".jpg", ".jpeg", ".gif", ".webp",
-        ".mp4", ".mov", ".avi", ".mkv"
-    )
-
-    blocked_domains = (
-        "youtube.com",
-        "youtu.be",
-        "vimeo.com",
-    )
-
-    if path.endswith(blocked_ext):
-        return False
-
-    if any(domain in url for domain in blocked_domains):
-        return False
-
+    blocked_ext = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mov", ".avi", ".mkv")
+    blocked_domains = ("youtube.com", "youtu.be", "vimeo.com")
+    
+    if path.endswith(blocked_ext): return False
+    if any(domain in url for domain in blocked_domains): return False
     return True
 
+def format_latex(text):
+    """
+    Robustly detects raw LaTeX strings and wraps them in $$ for proper block rendering.
+    """
+    # Detect common LaTeX keywords or math structures
+    latex_patterns = [
+        r"\\text", r"\\frac", r"\\times", r"\\sqrt", r"K\^T", r"d_k", r"softmax", r"\\left", r"\\right"
+    ]
+    
+    # Check if any pattern exists in the text
+    if any(re.search(p, text) for p in latex_patterns):
+        # Clean up Wikipedia specific display tags if they exist
+        clean_text = text.replace(r"{\displaystyle", "").replace(r"{\text", r"\text").rstrip("}")
+        
+        # If it's already wrapped in $, return as is, otherwise wrap in $$
+        if clean_text.strip().startswith("$"):
+            return clean_text
+        return f"$$\n{clean_text.strip()}\n$$"
+    
+    return text
 
 # -------------------------------------------------
 # Session State Init
 # -------------------------------------------------
 if "urls_processed" not in st.session_state:
     st.session_state.urls_processed = False
-
 if "last_urls" not in st.session_state:
     st.session_state.last_urls = []
-
-
-# -------------------------------------------------
-# Sidebar – URL Input
-# -------------------------------------------------
-st.sidebar.header("🔗 Enter URLs")
-
-url1 = st.sidebar.text_input("URL 1")
-url2 = st.sidebar.text_input("URL 2")
-url3 = st.sidebar.text_input("URL 3")
-
-raw_urls = [u.strip() for u in (url1, url2, url3) if u.strip()]
-
-valid_urls = []
-invalid_urls = []
-unsupported_urls = []
-
-for url in raw_urls:
-    if not is_valid_url(url):
-        invalid_urls.append(url)
-    elif not is_supported_url(url):
-        unsupported_urls.append(url)
-    else:
-        valid_urls.append(url)
-
-if invalid_urls:
-    st.sidebar.warning(
-        "⚠️ Invalid URLs:\n" + "\n".join(f"- {u}" for u in invalid_urls)
-    )
-
-if unsupported_urls:
-    st.sidebar.info(
-        "🖼️ Media / Video URLs not supported:\n" +
-        "\n".join(f"- {u}" for u in unsupported_urls)
-    )
-
-# Reset if URLs changed
-if valid_urls != st.session_state.last_urls:
-    st.session_state.urls_processed = False
-
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 # -------------------------------------------------
-# Sidebar Controls
+# Sidebar – URL Input & Configuration
 # -------------------------------------------------
-process_btn = st.sidebar.button("⚙️ Process URLs")
-reset_btn = st.sidebar.button(
-    "🔄 Reset",
-    disabled=not (raw_urls or st.session_state.urls_processed)
-)
+with st.sidebar:
+    st.title("⚙️ Knowledge Setup")
+    st.markdown("Enter URLs to build the AI context.")
+    
+    url1 = st.text_input("URL 1", placeholder="https://...")
+    url2 = st.text_input("URL 2", placeholder="https://...")
+    url3 = st.text_input("URL 3", placeholder="https://...")
 
+    raw_urls = [u.strip() for u in (url1, url2, url3) if u.strip()]
 
-# -------------------------------------------------
-# Reset Logic
-# -------------------------------------------------
-if reset_btn:
-    st.session_state.urls_processed = False
-    st.session_state.last_urls = []
-    st.rerun()
+    valid_urls = []
+    for url in raw_urls:
+        if is_valid_url(url) and is_supported_url(url):
+            valid_urls.append(url)
 
-
-# -------------------------------------------------
-# URL Processing
-# -------------------------------------------------
-if process_btn:
-    if not valid_urls:
-        st.sidebar.error("❌ Please enter at least one valid text-based URL.")
-    else:
-        st.session_state.last_urls = valid_urls
+    if valid_urls != st.session_state.last_urls:
         st.session_state.urls_processed = False
 
-        status_box = st.sidebar.empty()
-        progress_bar = st.sidebar.progress(0)
+    st.markdown("---")
+    
+    process_btn = st.button("Process URLs", type="primary", use_container_width=True)
+    
+    if st.button("Reset App", use_container_width=True):
+        st.session_state.urls_processed = False
+        st.session_state.last_urls = []
+        st.session_state.messages = []
+        st.rerun()
 
-        step_progress = {
-            "Initializing components": 10,
-            "Resetting vector store": 25,
-            "Loading data": 50,
-            "Splitting text": 75,
-            "Adding chunks": 90,
-        }
-
-        current_progress = 0
-
-        for step in process_urls(valid_urls):
-            status_box.info(step)
-
-            for key, target in step_progress.items():
-                if key.lower() in step.lower():
-                    while current_progress < target:
-                        current_progress += 1
-                        progress_bar.progress(current_progress)
-                        time.sleep(0.02)
-                    break
-
-        progress_bar.progress(100)
-        status_box.success("✅ Vector database is ready.")
-        st.session_state.urls_processed = True
-
-
-# -------------------------------------------------
-# Main Area – Q&A
-# -------------------------------------------------
-st.divider()
-st.header("❓ Ask a Question")
-
-if not st.session_state.urls_processed:
-    st.info("🛈 Please process URLs before asking questions.")
-    st.text_input("Ask a question", disabled=True)
-    st.button("💡 Get Answer", disabled=True)
-else:
-    query = st.text_input("Ask a question")
-    ask_btn = st.button("💡 Get Answer")
-
-    if ask_btn:
-        if not query.strip():
-            st.error("❌ Please enter a question.")
+    if process_btn:
+        if not valid_urls:
+            st.error("❌ Please enter at least one valid URL.")
         else:
+            st.session_state.last_urls = valid_urls
+            status_box = st.empty()
+            progress_bar = st.progress(0)
+            
+            step_progress = {"Initializing": 10, "Resetting": 25, "Loading": 50, "Splitting": 75, "Adding": 90}
+            current_progress = 0
+            
             try:
-                with st.spinner("Thinking..."):
-                    answer, sources = generate_answer(query)
+                for step in process_urls(valid_urls):
+                    status_box.info(f"📋 {step}")
+                    for key, target in step_progress.items():
+                        if key.lower() in step.lower():
+                            while current_progress < target:
+                                current_progress += 1
+                                progress_bar.progress(current_progress)
+                                time.sleep(0.01)
+                            break
+                
+                progress_bar.progress(100)
+                st.session_state.urls_processed = True
+                st.success("✅ Ready!")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
 
-                st.subheader("✅ Answer")
-                st.markdown(answer, unsafe_allow_html=True)
+# -------------------------------------------------
+# Main Area – Q&A Interface
+# -------------------------------------------------
+st.title("Web-based RAG Assistant")
+st.markdown("Ask questions based on your processed web content.")
 
-                if sources:
-                    st.subheader("📌 Sources")
-                    for src in sources:
-                        st.markdown(f"- {src}")
+# Display Chat History
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-            except RuntimeError as e:
-                # Handle "Vector store not initialized" gracefully
-                st.warning(f"⚠️ {str(e)}")
-                st.info("🛈 Please process URLs first before asking questions.")
+# Q&A Logic
+if not st.session_state.urls_processed:
+    st.info("👈 **Setup your sources in the sidebar to begin.**")
+else:
+    if query := st.chat_input("Ask a question about your processed URLs..."):
+        
+        st.session_state.messages.append({"role": "user", "content": query})
+        with st.chat_message("user"):
+            st.markdown(query)
+
+        with st.chat_message("assistant"):
+            try:
+                with st.spinner("Analyzing..."):
+                    raw_answer, sources = generate_answer(query)
+                    
+                    # Apply the Fix: Format any mathematical formulas
+                    formatted_answer = format_latex(raw_answer)
+                    st.markdown(formatted_answer)
+                    
+                    if sources:
+                        with st.expander("📚 View Sources"):
+                            for src in sources:
+                                st.markdown(f"- {src}")
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": formatted_answer})
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
