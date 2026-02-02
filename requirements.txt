@@ -6,3 +6,5 @@ langchain_text_splitters==1.1.0
 python-dotenv==1.2.1
 streamlit==1.53.1
 sentence-transformers
+beautifulsoup4
+lxml
