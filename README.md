@@ -34,7 +34,6 @@ The application is decoupled into two primary logic loops: **Knowledge Ingestion
 - 🧠 **Zero-Hallucination Logic**: System prompts enforce strict grounding—if the answer isn't in the context, the AI won't guess.
 - 📚 **Source Attribution**: Transparent citation tracking showing exactly which URLs influenced the answer.
 - ➗ **High-Fidelity Math Rendering**: Custom regex-based pipeline identifies and cleans LaTeX artifacts, rendering complex equations perfectly via `st.latex()`.
-- ⚙️ **Optimized Performance**: Optimized for Windows environments using `asyncio` loop policies and persistent vector indexing to avoid redundant re-processing.
 
 ---
 
@@ -59,6 +58,8 @@ The application is decoupled into two primary logic loops: **Knowledge Ingestion
 │   └── vectorstore/     # Persistent ChromaDB collection
 ├── .env                 # API Credentials
 └── requirements.txt     # Project Dependencies
+```
+---
 
 ## 🚀 Getting Started
 1. Clone the repo.
